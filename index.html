@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AJD Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      :root {
+        --bg: #f4f6fb;
+        --panel: #ffffff;
+        --ink: #1d2433;
+        --muted: #5e6a7c;
+        --line: #e5eaf2;
+        --primary: #3b82f6;
+        --primary-soft: rgba(59,130,246,0.12);
+        --green: #22c55e;
+        --orange: #f59e0b;
+        --red: #ef4444;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: 'Segoe UI', 'Malgun Gothic', sans-serif;
+      }
+      .container {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 32px 20px 64px;
+      }
+      h1 {
+        margin: 0 0 18px;
+        font-size: clamp(2.2rem, 5vw, 4rem);
+        line-height: 1.1;
+        letter-spacing: -0.05em;
+        font-weight: 800;
+      }
+      .subtitle {
+        font-size: clamp(1.2rem, 2vw, 1.8rem);
+        color: var(--muted);
+        margin-bottom: 28px;
+        font-weight: 500;
+      }
+      .status {
+        display: inline-block;
+        background: var(--primary-soft);
+        border: 1px solid rgba(59,130,246,0.2);
+        color: var(--primary);
+        border-radius: 999px;
+        padding: 9px 14px;
+        font-weight: 700;
+        margin-bottom: 22px;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 22px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 18px 18px 14px;
+        box-shadow: 0 10px 18px rgba(15, 23, 42, 0.04);
+      }
+      .card-label {
+        display: block;
+        color: var(--muted);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 10px;
+      }
+      .card-value {
+        font-size: clamp(1.5rem, 2.5vw, 2.2rem);
+        font-weight: 800;
+        letter-spacing: -0.04em;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr;
+        gap: 18px;
+        margin-bottom: 24px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 10px 18px rgba(15, 23, 42, 0.04);
+      }
+      .panel h2 {
+        margin: 0 0 12px;
+        font-size: 1.05rem;
+      }
+      .chart-wrap {
+        position: relative;
+        height: 320px;
+      }
+      .table-wrap {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: 0 10px 18px rgba(15, 23, 42, 0.04);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 700px;
+      }
+      th, td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+      }
+      th {
+        background: #f9fafc;
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      td {
+        font-size: 0.95rem;
+      }
+      .empty {
+        color: var(--muted);
+        padding: 20px;
+      }
+      @media (max-width: 900px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>AJD</h1>
+      <div class="subtitle">Google Sheets 연동 대시보드</div>
+      <div class="status" id="status">데이터 로딩 중...</div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="grid">
+        <div class="panel">
+          <h2>데이터 차트</h2>
+          <div class="chart-wrap">
+            <canvas id="chart"></canvas>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>요약</h2>
+          <div id="summary" class="empty">요약 정보를 불러오는 중입니다.</div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead id="thead"></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script>
+      const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/2PACX-1vTHjYdKL-DbXDzp19ukPoJwYJgDYcayWc2wJG4Ho23uReMI3uBAHAgD7PfhaOFdj0it2R88XDF5pEqk/export?format=csv&gid=0';
+      const state = { rows: [], columns: [] };
+
+      function toNumber(value) {
+        if (value === null || value === undefined || String(value).trim() === '') return null;
+        const cleaned = String(value).replace(/,/g, '').replace(/%/g, '').trim();
+        const num = Number(cleaned);
+        return Number.isFinite(num) ? num : null;
+      }
+
+      function formatNumber(value) {
+        if (value === null || value === undefined || Number.isNaN(value)) return '-';
+        return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 }).format(value);
+      }
+
+      function detectNumericColumns(rows, columns) {
+        return columns.filter((col) => {
+          const valid = rows.map((row) => toNumber(row[col])).filter((value) => value !== null);
+          return valid.length > 0 && valid.length / Math.max(rows.length, 1) > 0.25;
+        });
+      }
+
+      function detectCategoryColumns(rows, columns) {
+        return columns.filter((col) => {
+          const values = rows.map((row) => String(row[col] || '').trim()).filter(Boolean);
+          return new Set(values).size > 0 && new Set(values).size <= Math.min(rows.length, 12);
+        });
+      }
+
+      function renderStats() {
+        const statsEl = document.getElementById('stats');
+        if (!state.rows.length || !state.columns.length) {
+          statsEl.innerHTML = '<div class="card"><span class="card-label">상태</span><div class="card-value">No Data</div></div>';
+          return;
+        }
+
+        const numericCols = detectNumericColumns(state.rows, state.columns);
+        const numericKey = numericCols[0] || state.columns[0];
+        const values = state.rows.map((row) => toNumber(row[numericKey])).filter((v) => v !== null);
+        const total = values.reduce((sum, v) => sum + v, 0);
+        const avg = values.length ? total / values.length : 0;
+        const max = values.length ? Math.max(...values) : 0;
+
+        const cards = [
+          { label: 'Records', value: formatNumber(state.rows.length) },
+          { label: numericKey ? `${numericKey} Total` : 'Total', value: formatNumber(total) },
+          { label: numericKey ? `${numericKey} Avg` : 'Average', value: formatNumber(avg) },
+          { label: numericKey ? `${numericKey} Max` : 'Max', value: formatNumber(max) }
+        ];
+
+        statsEl.innerHTML = cards.map((card) => `
+          <div class="card">
+            <span class="card-label">${card.label}</span>
+            <div class="card-value">${card.value}</div>
+          </div>
+        `).join('');
+      }
+
+      function renderSummary() {
+        const summaryEl = document.getElementById('summary');
+        if (!state.rows.length || !state.columns.length) {
+          summaryEl.textContent = '데이터가 없습니다.';
+          return;
+        }
+
+        const numericCols = detectNumericColumns(state.rows, state.columns);
+        const categoryCols = detectCategoryColumns(state.rows, state.columns);
+        const numericKey = numericCols[0];
+        const categoryKey = categoryCols[0] || state.columns[0];
+
+        let html = '<div style="display:grid; gap:12px;">';
+
+        if (numericKey) {
+          const total = state.rows.reduce((sum, row) => sum + (toNumber(row[numericKey]) || 0), 0);
+          html += `
+            <div class="card">
+              <span class="card-label">${numericKey} 합계</span>
+              <div class="card-value">${formatNumber(total)}</div>
+            </div>
+          `;
+        }
+
+        if (categoryKey && numericKey) {
+          const best = state.rows
+            .map((row) => ({ label: row[categoryKey], value: toNumber(row[numericKey]) || 0 }))
+            .filter((row) => row.label && row.label !== '')
+            .sort((a, b) => b.value - a.value)[0];
+
+          if (best) {
+            html += `
+              <div class="card">
+                <span class="card-label">최고값 항목</span>
+                <div class="card-value">${String(best.label).slice(0, 20)}</div>
+              </div>
+            `;
+          }
+        }
+
+        html += '</div>';
+        summaryEl.innerHTML = html;
+      }
+
+      function renderChart() {
+        const ctx = document.getElementById('chart');
+        if (!state.rows.length || !state.columns.length) return;
+
+        const numericCols = detectNumericColumns(state.rows, state.columns);
+        const categoryCols = detectCategoryColumns(state.rows, state.columns);
+        const xKey = categoryCols[0] || state.columns[0];
+        const yKey = numericCols[0] || state.columns[1];
+        if (!xKey || !yKey) return;
+
+        const aggregated = {};
+        for (const row of state.rows) {
+          const label = String(row[xKey] || '기타').trim();
+          const value = toNumber(row[yKey]) || 0;
+          if (!label) continue;
+          aggregated[label] = (aggregated[label] || 0) + value;
+        }
+
+        const entries = Object.entries(aggregated).slice(0, 8);
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: entries.map(([k]) => k),
+            datasets: [{
+              label: yKey,
+              data: entries.map(([, v]) => v),
+              backgroundColor: 'rgba(59,130,246,0.75)',
+              borderColor: 'rgba(59,130,246,1)',
+              borderWidth: 1,
+              borderRadius: 8
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              y: { beginAtZero: false },
+              x: { grid: { display: false } }
+            }
+          }
+        });
+      }
+
+      function renderTable() {
+        const thead = document.getElementById('thead');
+        const tbody = document.getElementById('tbody');
+
+        if (!state.columns.length) {
+          thead.innerHTML = '';
+          tbody.innerHTML = '<tr><td class="empty" colspan="1">데이터가 없습니다.</td></tr>';
+          return;
+        }
+
+        const cols = state.columns.slice(0, 8);
+        thead.innerHTML = `<tr>${cols.map((col) => `<th>${col}</th>`).join('')}</tr>`;
+        tbody.innerHTML = state.rows.slice(0, 12).map((row) => {
+          return `<tr>${cols.map((col) => `<td>${row[col] ?? '-'}</td>`).join('')}</tr>`;
+        }).join('');
+      }
+
+      async function loadData() {
+        try {
+          const response = await fetch(SHEET_CSV_URL, { cache: 'no-store' });
+          if (!response.ok) throw new Error('CSV load failed');
+
+          const text = await response.text();
+          const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+          const rows = (parsed.data || []).filter((row) => Object.values(row).some((value) => String(value ?? '').trim() !== ''));
+          const columns = parsed.meta.fields || [];
+
+          state.rows = rows;
+          state.columns = columns;
+
+          document.getElementById('status').textContent = '데이터 연결 완료';
+          renderStats();
+          renderSummary();
+          renderChart();
+          renderTable();
+        } catch (error) {
+          console.error(error);
+          document.getElementById('status').textContent = '연결 실패';
+          document.getElementById('summary').textContent = '스프레드시트가 공개 상태인지 확인해 주세요. 링크가 올바른지 다시 한 번 확인해 주세요.';
+        }
+      }
+
+      loadData();
+    </script>
+  </body>
+</html>
